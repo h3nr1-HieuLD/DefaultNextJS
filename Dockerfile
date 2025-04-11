@@ -1,46 +1,61 @@
-# Stage 1: Build the application
-FROM node:18-alpine AS builder
+# syntax=docker.io/docker/dockerfile:1
 
-# Set working directory
+FROM node:20-alpine AS base
+
+# Install dependencies only when needed
+FROM base AS deps
+RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
-# Copy package files and install dependencies
-COPY package*.json ./
-RUN npm ci
+# Install dependencies based on the preferred package manager
+COPY package.json yarn.lock* package-lock.json* pnpm-lock.yaml* .npmrc* ./
+RUN \
+  if [ -f yarn.lock ]; then yarn --frozen-lockfile; \
+  elif [ -f package-lock.json ]; then npm ci; \
+  elif [ -f pnpm-lock.yaml ]; then corepack enable pnpm && pnpm i --frozen-lockfile; \
+  else echo "Lockfile not found." && exit 1; \
+  fi
 
-# Copy all project files
+# Rebuild the source code only when needed
+FROM base AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Build the Next.js application
-RUN npm run build
+RUN \
+  if [ -f yarn.lock ]; then yarn run build; \
+  elif [ -f package-lock.json ]; then npm run build; \
+  elif [ -f pnpm-lock.yaml ]; then corepack enable pnpm && pnpm run build; \
+  else echo "Lockfile not found." && exit 1; \
+  fi
 
-# Stage 2: Production environment
-FROM node:18-alpine AS runner
-
+# Production image, copy all the files and run next
+FROM base AS runner
 WORKDIR /app
 
-# Set to production environment
 ENV NODE_ENV=production
 
-# Add a non-root user for security
-RUN addgroup --system --gid 1001 nodejs && \
-    adduser --system --uid 1001 nextjs
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
 
-# Copy only necessary files from builder stage
-COPY --from=builder /app/next.config.js ./
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/node_modules ./node_modules
+# Set up permissions for user nextjs
+RUN mkdir -p .next
 
-# Set correct permissions
+# Copy standalone output first
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+# Copy public folder
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+
+# Set permissions
 RUN chown -R nextjs:nodejs /app
 
-# Switch to non-root user
 USER nextjs
-
-# Expose port
 EXPOSE 3000
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
 
-# Define the command to run the app
-CMD ["npm", "start"]
+# When using standalone output, we need to use the server.js file directly
+# instead of running "next start"
+CMD ["node", "server.js"]
