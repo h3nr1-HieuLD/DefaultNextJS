@@ -39,6 +39,9 @@ RUN chown -R nextjs:nodejs /app
 USER nextjs
 EXPOSE 3000
 ENV PORT=3000
-ENV HOSTNAME=0.0.0.0
+ENV HOSTNAME="0.0.0.0"
+ENV HOST="0.0.0.0"
+# This prevents Next.js from trying to bind to the container's hostname
+ENV NEXT_PRIVATE_HOST_ONLY=0.0.0.0
 
 CMD ["node", "server.js"]
